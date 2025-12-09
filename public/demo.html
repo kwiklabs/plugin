@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kwik Embed Demo</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .demo-container {
+      background: white;
+      border-radius: 16px;
+      padding: 3rem;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 600px;
+      width: 100%;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: #6b7280;
+      margin-bottom: 2rem;
+      font-size: 1rem;
+    }
+
+    .demo-section {
+      margin-bottom: 2rem;
+    }
+
+    .demo-section h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 1rem;
+    }
+
+    .event-log {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 1rem;
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 0.875rem;
+    }
+
+    .event-log-entry {
+      padding: 0.25rem 0;
+      color: #374151;
+    }
+
+    .event-log-entry.error {
+      color: #dc2626;
+    }
+
+    .event-log-entry.success {
+      color: #059669;
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    button {
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: #3b82f6;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #2563eb;
+    }
+
+    .btn-secondary {
+      background: #e5e7eb;
+      color: #374151;
+    }
+
+    .btn-secondary:hover {
+      background: #d1d5db;
+    }
+  </style>
+</head>
+<body>
+  <div class="demo-container">
+    <h1>🚀 Kwik Embed Demo</h1>
+    <p class="subtitle">Secure encrypted file upload widget</p>
+
+    <div class="demo-section">
+      <h2>Default Configuration</h2>
+      <kwik-embed id="embed1"></kwik-embed>
+    </div>
+
+    <div class="demo-section">
+      <h2>Custom Configuration</h2>
+      <kwik-embed 
+        id="embed2"
+        label="Share your document"
+        expires="7d"
+        max-downloads="5"
+        theme="light"
+      ></kwik-embed>
+    </div>
+
+    <div class="demo-section">
+      <h2>Event Log</h2>
+      <div id="eventLog" class="event-log">
+        <div class="event-log-entry">Waiting for upload...</div>
+      </div>
+      <div class="controls">
+        <button class="btn-primary" onclick="testUpload()">Test Upload (Programmatic)</button>
+        <button class="btn-secondary" onclick="clearLog()">Clear Log</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../dist/kwik-embed.min.js"></script>
+  <script>
+    const log = document.getElementById('eventLog');
+    const embed1 = document.getElementById('embed1');
+    const embed2 = document.getElementById('embed2');
+
+    function addLog(message, type = 'info') {
+      const entry = document.createElement('div');
+      entry.className = `event-log-entry ${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      log.appendChild(entry);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function clearLog() {
+      log.innerHTML = '<div class="event-log-entry">Waiting for upload...</div>';
+    }
+
+    // Listen to events on both widgets
+    [embed1, embed2].forEach((embed, index) => {
+      embed.addEventListener('kwik:upload-start', (e) => {
+        addLog(`Widget ${index + 1}: Upload started - ${e.detail.file.name} (${formatBytes(e.detail.file.size)})`);
+      });
+
+      embed.addEventListener('kwik:upload-progress', (e) => {
+        const { stage, percentage, speed, eta } = e.detail;
+        const speedStr = speed ? `${formatBytes(speed)}/s` : '';
+        const etaStr = eta ? `ETA ${Math.round(eta)}s` : '';
+        addLog(`Widget ${index + 1}: ${stage} ${percentage}% ${speedStr} ${etaStr}`);
+      });
+
+      embed.addEventListener('kwik:upload-complete', (e) => {
+        addLog(`Widget ${index + 1}: Upload complete! ${e.detail.url}`, 'success');
+      });
+
+      embed.addEventListener('kwik:upload-error', (e) => {
+        addLog(`Widget ${index + 1}: Error - ${e.detail.error.message}`, 'error');
+      });
+    });
+
+    async function testUpload() {
+      const content = 'Test file content created at ' + new Date().toISOString();
+      const blob = new Blob([content], { type: 'text/plain' });
+      const file = new File([blob], 'test.txt', { type: 'text/plain' });
+
+      try {
+        addLog('Programmatic upload started...');
+        const result = await embed1.upload(file);
+        addLog(`Programmatic upload complete: ${result.url}`, 'success');
+      } catch (error) {
+        addLog(`Programmatic upload failed: ${error.message}`, 'error');
+      }
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+{
+  "name": "@kwiklabs/plugin",
+  "version": "0.1.0",
+  "description": "Kwik Embed — secure encrypted file upload widget for any website",
+  "main": "./dist/kwik-embed.js",
+  "module": "./dist/kwik-embed.mjs",
+  "types": "./dist/index.d.ts",
+  "unpkg": "./dist/kwik-embed.min.js",
+  "jsdelivr": "./dist/kwik-embed.min.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "prepublishOnly": "pnpm build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kwiklabs/plugin.git"
+  },
+  "keywords": [
+    "kwik",
+    "file-sharing",
+    "encryption",
+    "zero-knowledge",
+    "embed",
+    "widget"
+  ],
+  "author": "KWIK Labs <legal@kwik.gg>",
+  "license": "MIT",
+  "homepage": "https://kwik.gg/embed",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

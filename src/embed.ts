@@ -7,8 +7,8 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
   private dropzone: HTMLDivElement;
   private abortController: AbortController | null = null;
 
-  // Constants matching kwik's crypto implementation
-  private readonly PBKDF2_ITERATIONS = 100000;
+  // Constants matching kwik's crypto implementation (OWASP 2023 recommendation)
+  private readonly PBKDF2_ITERATIONS = 310000;
   private readonly SALT_LENGTH = 16;
   private readonly IV_LENGTH = 12;
   private readonly AUTH_TAG_LENGTH = 16;

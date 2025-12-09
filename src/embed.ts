@@ -138,36 +138,71 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
     this.showProgress({ stage: 'encrypting', percentage: 0, bytesProcessed: 0, totalBytes: file.size });
 
     this.abortController = new AbortController();
-    const chunkSize = 5 * 1024 * 1024; // 5MB chunks
-    const chunks: Blob[] = [];
-
-    // Simulate chunking (in production, integrate with @kwiklabs/sdk)
-    for (let offset = 0; offset < file.size; offset += chunkSize) {
-      const chunk = file.slice(offset, offset + chunkSize);
-      chunks.push(chunk);
-    }
 
     try {
-      // Encryption phase
-      for (let i = 0; i < chunks.length; i++) {
-        if (this.abortController.signal.aborted) throw new Error('Upload cancelled');
-        
-        const percentage = Math.round(((i + 1) / chunks.length) * 50); // First 50% for encryption
-        this.showProgress({
-          stage: 'encrypting',
-          percentage,
-          bytesProcessed: (i + 1) * chunkSize,
-          totalBytes: file.size,
-        });
+      // Generate encryption key and IV
+      const encryptionKey = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt']
+      );
+      
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      
+      // Encrypt filename and mimetype
+      const textEncoder = new TextEncoder();
+      const encryptedFilename = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        encryptionKey,
+        textEncoder.encode(file.name)
+      );
+      const encryptedMimetype = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        encryptionKey,
+        textEncoder.encode(file.type || 'application/octet-stream')
+      );
 
-        await new Promise(resolve => setTimeout(resolve, 100)); // Simulate encryption
-      }
+      // Read and encrypt file
+      const fileBuffer = await file.arrayBuffer();
+      
+      this.showProgress({
+        stage: 'encrypting',
+        percentage: 50,
+        bytesProcessed: file.size / 2,
+        totalBytes: file.size,
+      });
 
-      // Upload phase
+      if (this.abortController.signal.aborted) throw new Error('Upload cancelled');
+
+      const encryptedFile = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        encryptionKey,
+        fileBuffer
+      );
+
+      this.showProgress({
+        stage: 'uploading',
+        percentage: 75,
+        bytesProcessed: file.size,
+        totalBytes: file.size,
+      });
+
+      // Export key for URL fragment
+      const exportedKey = await crypto.subtle.exportKey('raw', encryptionKey);
+      const keyBase64 = this.arrayBufferToBase64Url(exportedKey);
+      const ivBase64 = this.arrayBufferToBase64Url(iv);
+
+      // Prepare upload
+      const expiryHours = this.parseExpiry(this.config.expires || '24h');
+      
       const formData = new FormData();
-      formData.append('file', file);
-      formData.append('expires', this.config.expires || '24h');
+      formData.append('encryptedFile', new Blob([encryptedFile]));
+      formData.append('encryptedFilename', this.arrayBufferToBase64Url(encryptedFilename));
+      formData.append('encryptedMimetype', this.arrayBufferToBase64Url(encryptedMimetype));
+      formData.append('originalSize', String(file.size));
+      formData.append('expiryHours', String(expiryHours));
       formData.append('maxDownloads', String(this.config.maxDownloads || 10));
+      formData.append('allowMultipleDownloads', 'true');
 
       const response = await fetch(`${this.config.apiUrl}/upload`, {
         method: 'POST',
@@ -176,10 +211,11 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
       });
 
       if (!response.ok) {
-        throw new Error(`Upload failed: ${response.statusText}`);
+        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error(errorData.error || `Upload failed: ${response.statusText}`);
       }
 
-      const result: UploadResult = await response.json();
+      const data = await response.json();
 
       this.showProgress({
         stage: 'complete',
@@ -187,6 +223,12 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
         bytesProcessed: file.size,
         totalBytes: file.size,
       });
+
+      const result: UploadResult = {
+        fileId: data.fileId,
+        url: `${this.config.apiUrl?.replace('/api', '') || 'https://kwik.gg'}/d/${data.fileId}#${keyBase64}.${ivBase64}`,
+        expiresAt: data.expiresAt,
+      };
 
       return result;
     } catch (error) {
@@ -302,5 +344,25 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+  }
+
+  private arrayBufferToBase64Url(buffer: ArrayBuffer | Uint8Array): string {
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary)
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
+  }
+
+  private parseExpiry(expires: string): number {
+    const match = expires.match(/^(\d+)(h|d)$/);
+    if (!match) return 24;
+    const [, value, unit] = match;
+    const num = parseInt(value, 10);
+    return unit === 'h' ? num : num * 24;
   }
 }

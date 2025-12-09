@@ -7,6 +7,12 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
   private dropzone: HTMLDivElement;
   private abortController: AbortController | null = null;
 
+  // Constants matching kwik's crypto implementation
+  private readonly PBKDF2_ITERATIONS = 100000;
+  private readonly SALT_LENGTH = 16;
+  private readonly IV_LENGTH = 12;
+  private readonly AUTH_TAG_LENGTH = 16;
+
   public config: KwikEmbedConfig = {
     label: 'Drop file or click to upload',
     expires: '24h',
@@ -140,26 +146,19 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
     this.abortController = new AbortController();
 
     try {
-      // Generate encryption key and IV
-      const encryptionKey = await crypto.subtle.generateKey(
-        { name: 'AES-GCM', length: 256 },
-        true,
-        ['encrypt']
-      );
+      // Generate random password for this upload (32 bytes = 256 bits of entropy)
+      const passwordBytes = crypto.getRandomValues(new Uint8Array(32));
+      const password = this.arrayBufferToBase64Url(passwordBytes.buffer);
       
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      
-      // Encrypt filename and mimetype
+      // Encrypt filename and mimetype using PBKDF2-based encryption
       const textEncoder = new TextEncoder();
-      const encryptedFilename = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv },
-        encryptionKey,
-        textEncoder.encode(file.name)
+      const encryptedFilename = await this.encryptWithPassword(
+        textEncoder.encode(file.name),
+        password
       );
-      const encryptedMimetype = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv },
-        encryptionKey,
-        textEncoder.encode(file.type || 'application/octet-stream')
+      const encryptedMimetype = await this.encryptWithPassword(
+        textEncoder.encode(file.type || 'application/octet-stream'),
+        password
       );
 
       // Read and encrypt file
@@ -174,10 +173,9 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
 
       if (this.abortController.signal.aborted) throw new Error('Upload cancelled');
 
-      const encryptedFile = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv },
-        encryptionKey,
-        fileBuffer
+      const encryptedFile = await this.encryptWithPassword(
+        new Uint8Array(fileBuffer),
+        password
       );
 
       this.showProgress({
@@ -187,16 +185,11 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
         totalBytes: file.size,
       });
 
-      // Export key for URL fragment
-      const exportedKey = await crypto.subtle.exportKey('raw', encryptionKey);
-      const keyBase64 = this.arrayBufferToBase64Url(exportedKey);
-      const ivBase64 = this.arrayBufferToBase64Url(iv);
-
       // Prepare upload
       const expiryHours = this.parseExpiry(this.config.expires || '24h');
       
       const formData = new FormData();
-      formData.append('encryptedFile', new Blob([encryptedFile]));
+      formData.append('encryptedFile', new Blob([encryptedFile as BlobPart]));
       formData.append('encryptedFilename', this.arrayBufferToBase64Url(encryptedFilename));
       formData.append('encryptedMimetype', this.arrayBufferToBase64Url(encryptedMimetype));
       formData.append('originalSize', String(file.size));
@@ -226,7 +219,7 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
 
       const result: UploadResult = {
         fileId: data.fileId,
-        url: `${this.config.apiUrl?.replace('/api', '') || 'https://kwik.gg'}/d/${data.fileId}#${keyBase64}.${ivBase64}`,
+        url: `${this.config.apiUrl?.replace('/api', '') || 'https://kwik.gg'}/d/${data.fileId}#${password}`,
         expiresAt: data.expiresAt,
       };
 
@@ -235,6 +228,71 @@ export class KwikEmbed extends HTMLElement implements KwikEmbedElement {
       this.dropzone.classList.remove('kwik-uploading');
       throw error;
     }
+  }
+
+  private async deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+    const textEncoder = new TextEncoder();
+    const passwordKey = await crypto.subtle.importKey(
+      'raw',
+      textEncoder.encode(password),
+      'PBKDF2',
+      false,
+      ['deriveKey']
+    );
+
+    return crypto.subtle.deriveKey(
+      {
+        name: 'PBKDF2',
+        salt: salt as BufferSource,
+        iterations: this.PBKDF2_ITERATIONS,
+        hash: 'SHA-256',
+      },
+      passwordKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt']
+    );
+  }
+
+  private async encryptWithPassword(data: Uint8Array, password: string): Promise<Uint8Array> {
+    // Generate random salt
+    const salt = new Uint8Array(this.SALT_LENGTH);
+    crypto.getRandomValues(salt);
+    
+    // Derive key from password
+    const key = await this.deriveKey(password, salt);
+    
+    // Generate random IV
+    const iv = new Uint8Array(this.IV_LENGTH);
+    crypto.getRandomValues(iv);
+    
+    // Encrypt data
+    const encrypted = await crypto.subtle.encrypt(
+      {
+        name: 'AES-GCM',
+        iv: iv as BufferSource,
+        tagLength: 128,
+      },
+      key,
+      data as BufferSource
+    );
+
+    const encryptedBytes = new Uint8Array(encrypted);
+    
+    // GCM mode: last 16 bytes are auth tag
+    const ciphertext = encryptedBytes.subarray(0, encryptedBytes.length - this.AUTH_TAG_LENGTH);
+    const authTag = encryptedBytes.subarray(encryptedBytes.length - this.AUTH_TAG_LENGTH);
+    
+    // Combine: salt + iv + authTag + ciphertext
+    const result = new Uint8Array(
+      this.SALT_LENGTH + this.IV_LENGTH + this.AUTH_TAG_LENGTH + ciphertext.length
+    );
+    result.set(salt, 0);
+    result.set(iv, this.SALT_LENGTH);
+    result.set(authTag, this.SALT_LENGTH + this.IV_LENGTH);
+    result.set(ciphertext, this.SALT_LENGTH + this.IV_LENGTH + this.AUTH_TAG_LENGTH);
+    
+    return result;
   }
 
   private showProgress(progress: UploadProgress) {
